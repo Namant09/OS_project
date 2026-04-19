@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RL CPU Scheduler</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0c10;
+  --surface: #111318;
+  --surface2: #181c24;
+  --border: #1e2330;
+  --accent: #00e5ff;
+  --accent2: #7c3aed;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --pink: #ec4899;
+  --text: #e2e8f0;
+  --muted: #64748b;
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'Space Grotesk', sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--sans); min-height:100vh; overflow-x:hidden; }
+
+/* Grid background */
+body::before {
+  content:''; position:fixed; inset:0; z-index:0;
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 40px 40px; opacity:0.4; pointer-events:none;
+}
+
+.app { position:relative; z-index:1; max-width:1400px; margin:0 auto; padding:24px; }
+
+/* Header */
+header { display:flex; align-items:center; justify-content:space-between; margin-bottom:32px; padding-bottom:20px; border-bottom:1px solid var(--border); }
+.logo { display:flex; align-items:center; gap:12px; }
+.logo-icon { width:40px; height:40px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:20px; }
+.logo h1 { font-size:20px; font-weight:700; letter-spacing:-0.5px; }
+.logo p { font-size:12px; color:var(--muted); font-family:var(--mono); }
+.status-bar { display:flex; gap:16px; align-items:center; font-family:var(--mono); font-size:11px; }
+.dot { width:8px; height:8px; border-radius:50%; animation: pulse 2s infinite; }
+.dot.green { background:var(--green); box-shadow:0 0 8px var(--green); }
+.dot.amber { background:var(--amber); box-shadow:0 0 8px var(--amber); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* Tabs */
+.tabs { display:flex; gap:4px; margin-bottom:24px; background:var(--surface); border-radius:10px; padding:4px; width:fit-content; }
+.tab { padding:8px 20px; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; color:var(--muted); transition:all .2s; border:none; background:none; font-family:var(--sans); }
+.tab.active { background:var(--surface2); color:var(--text); box-shadow:0 0 0 1px var(--border); }
+.tab:hover:not(.active) { color:var(--text); }
+
+.panel { display:none; }
+.panel.active { display:block; }
+
+/* Cards */
+.card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; }
+.card-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted); margin-bottom:14px; font-family:var(--mono); }
+
+/* Grid layouts */
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:16px; }
+
+/* Stat cards */
+.stat { text-align:center; }
+.stat .val { font-size:28px; font-weight:700; font-family:var(--mono); }
+.stat .lbl { font-size:11px; color:var(--muted); margin-top:4px; }
+.accent-text { color:var(--accent); }
+.green-text { color:var(--green); }
+.amber-text { color:var(--amber); }
+.red-text { color:var(--red); }
+.pink-text { color:var(--pink); }
+
+/* Buttons */
+.btn { padding:10px 22px; border-radius:8px; border:none; cursor:pointer; font-weight:700; font-size:13px; font-family:var(--sans); transition:all .2s; }
+.btn-primary { background:var(--accent); color:#000; }
+.btn-primary:hover { filter:brightness(1.1); transform:translateY(-1px); }
+.btn-secondary { background:var(--surface2); color:var(--text); border:1px solid var(--border); }
+.btn-secondary:hover { border-color:var(--accent); color:var(--accent); }
+.btn-danger { background:var(--red); color:#fff; }
+.btn:disabled { opacity:0.4; cursor:not-allowed; transform:none !important; }
+.btn-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+
+/* Process table */
+.proc-table { width:100%; border-collapse:collapse; font-size:13px; font-family:var(--mono); }
+.proc-table th { text-align:left; padding:8px 12px; font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); border-bottom:1px solid var(--border); }
+.proc-table td { padding:8px 12px; border-bottom:1px solid rgba(30,35,48,0.5); }
+.proc-table tr:last-child td { border-bottom:none; }
+.proc-table tr.running { background:rgba(0,229,255,0.05); }
+.badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:700; }
+.badge-ready { background:rgba(34,197,94,0.15); color:var(--green); }
+.badge-running { background:rgba(0,229,255,0.15); color:var(--accent); }
+.badge-waiting { background:rgba(245,158,11,0.15); color:var(--amber); }
+.badge-done { background:rgba(100,116,139,0.15); color:var(--muted); }
+.badge-rl { background:rgba(124,58,237,0.2); color:#a78bfa; }
+.badge-fcfs { background:rgba(0,229,255,0.1); color:var(--accent); }
+.badge-sjf { background:rgba(34,197,94,0.1); color:var(--green); }
+.badge-rr { background:rgba(245,158,11,0.1); color:var(--amber); }
+
+/* Gantt chart */
+.gantt-wrap { overflow-x:auto; padding-bottom:8px; }
+#ganttCanvas { display:block; }
+
+/* Chart canvas */
+.chart-wrap { position:relative; }
+canvas { border-radius:4px; }
+
+/* Sliders & inputs */
+.control-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+.control-row label { font-size:12px; color:var(--muted); width:130px; flex-shrink:0; font-family:var(--mono); }
+.slider { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:var(--border); outline:none; flex:1; cursor:pointer; }
+.slider::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; }
+.val-box { font-family:var(--mono); font-size:12px; width:44px; text-align:right; color:var(--accent); }
+input[type=number] { background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:6px; font-family:var(--mono); font-size:12px; width:70px; }
+input[type=number]:focus { outline:none; border-color:var(--accent); }
+select { background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:7px 10px; border-radius:6px; font-family:var(--mono); font-size:12px; cursor:pointer; }
+
+/* Progress bar */
+.progress-track { background:var(--surface2); border-radius:4px; height:6px; overflow:hidden; margin:8px 0; }
+.progress-fill { height:100%; border-radius:4px; background:linear-gradient(90deg,var(--accent2),var(--accent)); transition:width .3s; }
+
+/* Log */
+.log-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; height:160px; overflow-y:auto; font-family:var(--mono); font-size:11px; }
+.log-line { padding:1px 0; border-bottom:1px solid rgba(30,35,48,0.3); }
+.log-line:last-child { border-bottom:none; }
+.log-time { color:var(--muted); margin-right:8px; }
+.log-info { color:var(--accent); }
+.log-warn { color:var(--amber); }
+.log-ok { color:var(--green); }
+
+/* Comparison bars */
+.cmp-row { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+.cmp-label { width:60px; font-size:11px; font-family:var(--mono); text-align:right; }
+.cmp-bar-track { flex:1; background:var(--surface2); border-radius:4px; height:22px; overflow:hidden; position:relative; }
+.cmp-bar { height:100%; border-radius:4px; display:flex; align-items:center; padding-left:8px; font-size:11px; font-family:var(--mono); font-weight:700; transition:width 1s ease; }
+.cmp-bar-rl    { background:linear-gradient(90deg, rgba(124,58,237,0.6), rgba(124,58,237,0.3)); color:#c4b5fd; }
+.cmp-bar-fcfs  { background:linear-gradient(90deg, rgba(0,229,255,0.4), rgba(0,229,255,0.15)); color:var(--accent); }
+.cmp-bar-sjf   { background:linear-gradient(90deg, rgba(34,197,94,0.4), rgba(34,197,94,0.15)); color:var(--green); }
+.cmp-bar-rr    { background:linear-gradient(90deg, rgba(245,158,11,0.4), rgba(245,158,11,0.15)); color:var(--amber); }
+.cmp-val { width:55px; font-size:11px; font-family:var(--mono); color:var(--muted); }
+
+/* Neural network viz */
+#nnCanvas { display:block; margin:0 auto; }
+
+/* Reward chart */
+.mini-metric { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.mini-metric:last-child { border-bottom:none; }
+.mini-metric span:last-child { font-family:var(--mono); font-weight:700; }
+
+/* Toast */
+#toast { position:fixed; bottom:24px; right:24px; background:var(--surface); border:1px solid var(--accent); color:var(--accent); padding:12px 20px; border-radius:10px; font-size:13px; font-family:var(--mono); z-index:100; opacity:0; transform:translateY(10px); transition:all .3s; pointer-events:none; }
+#toast.show { opacity:1; transform:translateY(0); }
+</style>
+</head>
+<body>
+<div class="app">
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚙</div>
+    <div>
+      <h1>RL CPU Scheduler</h1>
+      <p>Deep Q-Network · Process Simulation · Comparison Engine</p>
+    </div>
+  </div>
+  <div class="status-bar">
+    <div class="dot green" id="statusDot"></div>
+    <span id="statusText" style="color:var(--green)">READY</span>
+    <span style="color:var(--border)">|</span>
+    <span>Episodes: <span id="hdrEpisodes" style="color:var(--accent);font-weight:700">0</span></span>
+    <span>Avg Reward: <span id="hdrReward" style="color:var(--amber);font-weight:700">—</span></span>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('simulate')">🖥 Simulate</button>
+  <button class="tab" onclick="switchTab('train')">🧠 Train Agent</button>
+  <button class="tab" onclick="switchTab('compare')">📊 Compare</button>
+  <button class="tab" onclick="switchTab('network')">🔬 Network</button>
+</div>
+
+<!-- SIMULATE PANEL -->
+<div class="panel active" id="tab-simulate">
+  <div class="grid-4">
+    <div class="card stat"><div class="val accent-text" id="simTime">0</div><div class="lbl">Clock Time</div></div>
+    <div class="card stat"><div class="val green-text" id="simDone">0</div><div class="lbl">Completed</div></div>
+    <div class="card stat"><div class="val amber-text" id="simWait">0.0</div><div class="lbl">Avg Wait Time</div></div>
+    <div class="card stat"><div class="val pink-text" id="simUtil">0%</div><div class="lbl">CPU Utilization</div></div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-title">Configuration</div>
+      <div class="control-row">
+        <label>Processes</label>
+        <input type="range" class="slider" id="numProcs" min="3" max="12" value="6" oninput="document.getElementById('numProcsVal').textContent=this.value">
+        <span class="val-box" id="numProcsVal">6</span>
+      </div>
+      <div class="control-row">
+        <label>Max Burst Time</label>
+        <input type="range" class="slider" id="maxBurst" min="5" max="30" value="15" oninput="document.getElementById('maxBurstVal').textContent=this.value">
+        <span class="val-box" id="maxBurstVal">15</span>
+      </div>
+      <div class="control-row">
+        <label>Time Quantum (RR)</label>
+        <input type="range" class="slider" id="timeQuantum" min="1" max="8" value="3" oninput="document.getElementById('tqVal').textContent=this.value">
+        <span class="val-box" id="tqVal">3</span>
+      </div>
+      <div class="control-row">
+        <label>Scheduler</label>
+        <select id="schedulerSelect">
+          <option value="rl">RL Agent (DQN)</option>
+          <option value="fcfs">FCFS</option>
+          <option value="sjf">SJF</option>
+          <option value="rr">Round Robin</option>
+        </select>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn btn-primary" onclick="startSimulation()">▶ Run Simulation</button>
+        <button class="btn btn-secondary" onclick="generateProcesses()">⟳ New Processes</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Process Queue</div>
+      <div style="overflow-y:auto; max-height:220px">
+        <table class="proc-table" id="procTable">
+          <thead><tr><th>PID</th><th>Burst</th><th>Priority</th><th>Arrival</th><th>Wait</th><th>State</th></tr></thead>
+          <tbody id="procBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title">Gantt Chart — Scheduling Timeline</div>
+    <div class="gantt-wrap">
+      <canvas id="ganttCanvas" height="80"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Simulation Log</div>
+    <div class="log-box" id="simLog"></div>
+  </div>
+</div>
+
+<!-- TRAIN PANEL -->
+<div class="panel" id="tab-train">
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-title">Hyperparameters</div>
+      <div class="control-row"><label>Learning Rate (α)</label><input type="range" class="slider" id="lr" min="1" max="50" value="10" oninput="document.getElementById('lrVal').textContent=(this.value/10000).toFixed(4)"><span class="val-box" id="lrVal">0.001</span></div>
+      <div class="control-row"><label>Discount (γ)</label><input type="range" class="slider" id="gamma" min="80" max="99" value="95" oninput="document.getElementById('gammaVal').textContent='0.'+this.value"><span class="val-box" id="gammaVal">0.95</span></div>
+      <div class="control-row"><label>Epsilon Start</label><input type="range" class="slider" id="epsStart" min="50" max="100" value="100" oninput="document.getElementById('epsStartVal').textContent=(this.value/100).toFixed(2)"><span class="val-box" id="epsStartVal">1.00</span></div>
+      <div class="control-row"><label>Epsilon Min</label><input type="range" class="slider" id="epsMin" min="1" max="20" value="5" oninput="document.getElementById('epsMinVal').textContent=(this.value/100).toFixed(2)"><span class="val-box" id="epsMinVal">0.05</span></div>
+      <div class="control-row"><label>Batch Size</label><input type="range" class="slider" id="batchSize" min="1" max="8" value="4" oninput="document.getElementById('bsVal').textContent=[8,16,32,64,128,256][this.value-1]||32"><span class="val-box" id="bsVal">64</span></div>
+      <div class="control-row"><label>Episodes</label><input type="range" class="slider" id="episodes" min="10" max="200" value="100" oninput="document.getElementById('epVal').textContent=this.value"><span class="val-box" id="epVal">100</span></div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn btn-primary" id="trainBtn" onclick="startTraining()">⚡ Start Training</button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopTraining()" disabled>■ Stop</button>
+        <button class="btn btn-secondary" onclick="resetAgent()">↺ Reset Agent</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Training Progress</div>
+      <div class="progress-track" style="height:8px"><div class="progress-fill" id="trainProgress" style="width:0%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:12px">
+        <span id="trainEpLabel">Episode 0 / 0</span>
+        <span id="trainEtaLabel">ETA: —</span>
+      </div>
+      <div class="mini-metric"><span>Total Episodes</span><span class="accent-text" id="mEpisodes">0</span></div>
+      <div class="mini-metric"><span>Best Reward</span><span class="green-text" id="mBestReward">—</span></div>
+      <div class="mini-metric"><span>Avg Reward (last 20)</span><span class="amber-text" id="mAvgReward">—</span></div>
+      <div class="mini-metric"><span>Epsilon (ε)</span><span style="color:#a78bfa" id="mEpsilon">1.00</span></div>
+      <div class="mini-metric"><span>Replay Buffer Size</span><span class="accent-text" id="mBuffer">0</span></div>
+      <div class="mini-metric"><span>Avg Wait Time</span><span class="pink-text" id="mAvgWait">—</span></div>
+      <div class="log-box" id="trainLog" style="margin-top:12px; height:120px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Reward Curve — Training History</div>
+    <canvas id="rewardCanvas" height="200"></canvas>
+  </div>
+</div>
+
+<!-- COMPARE PANEL -->
+<div class="panel" id="tab-compare">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title">Run Benchmark</div>
+    <div class="control-row">
+      <label>Test Workloads</label>
+      <input type="range" class="slider" id="benchN" min="5" max="50" value="20" oninput="document.getElementById('benchNVal').textContent=this.value">
+      <span class="val-box" id="benchNVal">20</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="runBenchmark()">▶ Run Benchmark</button>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-title">Average Waiting Time (lower = better)</div>
+      <div id="cmpWait"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Average Turnaround Time (lower = better)</div>
+      <div id="cmpTurn"></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">CPU Utilization % (higher = better)</div>
+      <div id="cmpUtil"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Throughput (processes/unit time, higher = better)</div>
+      <div id="cmpThru"></div>
+    </div>
+  </div>
+</div>
+
+<!-- NETWORK PANEL -->
+<div class="panel" id="tab-network">
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-title">DQN Architecture</div>
+      <canvas id="nnCanvas" height="300"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-title">State Space & Action Space</div>
+      <div style="font-size:12px; font-family:var(--mono); line-height:1.8">
+        <div style="color:var(--muted); margin-bottom:8px">STATE VECTOR (per process × N processes)</div>
+        <div><span style="color:var(--accent)">s[0]</span> = remaining burst time (normalized)</div>
+        <div><span style="color:var(--accent)">s[1]</span> = priority (0-9)</div>
+        <div><span style="color:var(--accent)">s[2]</span> = current wait time (normalized)</div>
+        <div><span style="color:var(--accent)">s[3]</span> = arrival time (normalized)</div>
+        <div style="color:var(--muted); margin:12px 0 8px">ACTION SPACE</div>
+        <div><span style="color:var(--green)">a ∈ {0, 1, ..., N-1}</span> = index of process to schedule</div>
+        <div style="color:var(--muted); margin:12px 0 8px">REWARD FUNCTION</div>
+        <div><span style="color:var(--amber)">r = -wait_penalty + completion_bonus</span></div>
+        <div style="color:var(--muted); font-size:11px; margin-top:4px">wait_penalty = Σ wait_time / max_burst</div>
+        <div style="color:var(--muted); font-size:11px;">completion_bonus = +10 per process done</div>
+        <div style="color:var(--muted); margin:12px 0 8px">BELLMAN UPDATE</div>
+        <div style="color:#c4b5fd;">Q(s,a) ← Q(s,a) + α[r + γ·maxQ(s',a') - Q(s,a)]</div>
+        <div style="color:var(--muted); margin:12px 0 8px">NETWORK LAYERS</div>
+        <div><span style="color:var(--accent)">Input</span>: state_size → <span style="color:var(--green)">Hidden1</span>: 128 → <span style="color:var(--green)">Hidden2</span>: 64 → <span style="color:var(--accent)">Output</span>: n_actions</div>
+        <div style="color:var(--muted); font-size:11px; margin-top:4px">Activation: ReLU | Optimizer: Adam | Loss: MSE</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Q-Value Heatmap — Current State</div>
+    <canvas id="qHeatmap" height="120"></canvas>
+    <div style="margin-top:12px; font-size:11px; color:var(--muted); font-family:var(--mono)">Higher Q-value = agent prefers to schedule this process. Run a simulation to update.</div>
+  </div>
+</div>
+
+</div>
+<div id="toast"></div>
+
+<script>
+// ==================== CORE RL ENGINE ====================
+
+class QTable {
+  constructor(nActions) {
+    this.nActions = nActions;
+    this.table = {};
+    this.lr = 0.001;
+    this.gamma = 0.95;
+    this.epsilon = 1.0;
+    this.epsDecay = 0.995;
+    this.epsMin = 0.05;
+    this.replayBuffer = [];
+    this.maxBuffer = 2000;
+    this.batchSize = 32;
+    // Simple linear network weights (simulated)
+    this.w1 = this.randn(48, 128);
+    this.b1 = new Array(128).fill(0);
+    this.w2 = this.randn(128, 64);
+    this.b2 = new Array(64).fill(0);
+    this.w3 = this.randn(64, nActions);
+    this.b3 = new Array(nActions).fill(0);
+  }
+  randn(r, c) {
+    const a = [];
+    for(let i=0;i<r;i++){
+      const row=[];
+      for(let j=0;j<c;j++) row.push((Math.random()-0.5)*0.3);
+      a.push(row);
+    }
+    return a;
+  }
+  relu(x) { return x.map(v=>Math.max(0,v)); }
+  matvec(m, v, b) {
+    return m[0].map((_,j)=>{
+      let s = b[j];
+      for(let i=0;i<v.length;i++) s+=m[i][j]*v[i];
+      return s;
+    });
+  }
+  forward(state) {
+    const s = state.slice(0, Math.min(state.length, 48));
+    const padded = s.length < 48 ? [...s, ...new Array(48-s.length).fill(0)] : s;
+    const h1 = this.relu(this.matvec(this.w1, padded, this.b1));
+    const h2 = this.relu(this.matvec(this.w2, h1, this.b2));
+    return this.matvec(this.w3, h2, this.b3);
+  }
+  selectAction(state, validActions) {
+    if(Math.random() < this.epsilon) {
+      return validActions[Math.floor(Math.random()*validActions.length)];
+    }
+    const qvals = this.forward(state);
+    let best = validActions[0], bestQ = -Infinity;
+    for(const a of validActions) {
+      if(qvals[a] > bestQ) { bestQ = qvals[a]; best = a; }
+    }
+    return best;
+  }
+  store(s, a, r, ns, done) {
+    this.replayBuffer.push({s,a,r,ns,done});
+    if(this.replayBuffer.length > this.maxBuffer) this.replayBuffer.shift();
+  }
+  train() {
+    if(this.replayBuffer.length < this.batchSize) return 0;
+    let totalLoss = 0;
+    const batch = [];
+    for(let i=0;i<this.batchSize;i++) {
+      const idx = Math.floor(Math.random()*this.replayBuffer.length);
+      batch.push(this.replayBuffer[idx]);
+    }
+    // Simplified weight update via reward signal
+    for(const {s,a,r,ns,done} of batch) {
+      const qvals = this.forward(s);
+      const nextQ = done ? 0 : Math.max(...this.forward(ns));
+      const target = r + (done ? 0 : this.gamma * nextQ);
+      const error = target - qvals[a];
+      totalLoss += error * error;
+      // Simple gradient: update output weights for action a
+      const h1 = this.relu(this.matvec(this.w1, s.slice(0,48).concat(new Array(Math.max(0,48-s.length)).fill(0)), this.b1));
+      const h2 = this.relu(this.matvec(this.w2, h1, this.b2));
+      for(let i=0;i<h2.length;i++) {
+        this.w3[i][a] += this.lr * error * h2[i] * 0.1;
+      }
+      this.b3[a] += this.lr * error * 0.1;
+    }
+    if(this.epsilon > this.epsMin) this.epsilon *= this.epsDecay;
+    return totalLoss / this.batchSize;
+  }
+}
+
+// ==================== PROCESS GENERATOR ====================
+
+function generateProcessList(n, maxBurst) {
+  const procs = [];
+  for(let i=0;i<n;i++) {
+    procs.push({
+      pid: `P${i+1}`,
+      burst: Math.floor(Math.random()*(maxBurst-1))+1,
+      remaining: 0,
+      priority: Math.floor(Math.random()*10),
+      arrival: Math.floor(Math.random()*8),
+      wait: 0,
+      start: -1,
+      finish: -1,
+      state: 'waiting'
+    });
+  }
+  procs.forEach(p=>p.remaining=p.burst);
+  procs.sort((a,b)=>a.arrival-b.arrival);
+  return procs;
+}
+
+function encodeState(procs, n) {
+  const state = [];
+  const maxB = Math.max(...procs.map(p=>p.burst), 1);
+  const maxW = Math.max(...procs.map(p=>p.wait), 1);
+  for(let i=0;i<n;i++) {
+    const p = procs[i] || null;
+    if(p && p.state !== 'done') {
+      state.push(p.remaining / maxB, p.priority / 9, p.wait / Math.max(maxW,1), p.arrival / 10);
+    } else {
+      state.push(0,0,0,0);
+    }
+  }
+  return state;
+}
+
+// ==================== SCHEDULERS ====================
+
+function scheduleFCFS(procs) {
+  const ps = procs.map(p=>({...p}));
+  const gantt = []; let t = 0;
+  const ready = [...ps].sort((a,b)=>a.arrival-b.arrival);
+  for(const p of ready) {
+    if(t < p.arrival) t = p.arrival;
+    p.wait = t - p.arrival;
+    p.start = t;
+    gantt.push({pid:p.pid, start:t, end:t+p.burst, color:null});
+    t += p.burst;
+    p.finish = t;
+  }
+  return {procs:ps, gantt};
+}
+
+function scheduleSJF(procs) {
+  const ps = procs.map(p=>({...p}));
+  const gantt = []; let t = 0;
+  const remaining = [...ps];
+  while(remaining.length > 0) {
+    const avail = remaining.filter(p=>p.arrival<=t);
+    if(!avail.length) { t++; continue; }
+    avail.sort((a,b)=>a.burst-b.burst);
+    const p = avail[0];
+    remaining.splice(remaining.indexOf(p),1);
+    p.wait = t - p.arrival;
+    p.start = t;
+    gantt.push({pid:p.pid, start:t, end:t+p.burst, color:null});
+    t += p.burst;
+    p.finish = t;
+  }
+  return {procs:ps, gantt};
+}
+
+function scheduleRR(procs, quantum) {
+  const ps = procs.map(p=>({...p, rem:p.burst}));
+  const gantt = []; let t = 0;
+  const queue = [...ps].sort((a,b)=>a.arrival-b.arrival);
+  const done = [];
+  let i = 0;
+  const ready = [];
+  while(done.length < ps.length) {
+    while(i < queue.length && queue[i].arrival <= t) { ready.push(queue[i++]); }
+    if(!ready.length) { t++; continue; }
+    const p = ready.shift();
+    const run = Math.min(quantum, p.rem);
+    if(p.start === -1) p.start = t;
+    gantt.push({pid:p.pid, start:t, end:t+run, color:null});
+    t += run;
+    p.rem -= run;
+    while(i < queue.length && queue[i].arrival <= t) { ready.push(queue[i++]); }
+    if(p.rem > 0) ready.push(p);
+    else { p.finish = t; p.wait = p.finish - p.arrival - p.burst; done.push(p); }
+  }
+  return {procs:ps, gantt};
+}
+
+function scheduleRL(procs, agent) {
+  const ps = procs.map(p=>({...p, rem:p.burst}));
+  const gantt = []; let t = 0;
+  const done = [];
+  let cpuBusy = 0;
+  while(done.length < ps.length) {
+    const avail = ps.filter(p=>p.arrival<=t && p.rem>0);
+    if(!avail.length) { t++; continue; }
+    const state = encodeState(ps, ps.length);
+    const validActs = avail.map(p=>ps.indexOf(p));
+    const idx = agent ? agent.selectAction(state, validActs) : validActs[0];
+    const p = ps[idx];
+    if(p.start===-1) p.start=t;
+    gantt.push({pid:p.pid, start:t, end:t+1, color:null});
+    p.wait += (avail.filter(q=>q!==p).length);
+    t++;
+    p.rem--;
+    cpuBusy++;
+    if(p.rem===0) { p.finish=t; done.push(p); }
+  }
+  ps.forEach(p=>{ if(p.finish===-1) p.finish=t; p.wait=Math.max(0,p.start-p.arrival); });
+  return {procs:ps, gantt, util: cpuBusy/t*100};
+}
+
+// ==================== GLOBAL STATE ====================
+
+let agent = new QTable(12);
+let currentProcs = [];
+let ganttData = [];
+let rewardHistory = [];
+let isTraining = false;
+let trainTimer = null;
+let totalEpisodes = 0;
+let simInterval = null;
+
+// ==================== SIMULATE TAB ====================
+
+function generateProcesses() {
+  const n = parseInt(document.getElementById('numProcs').value);
+  const mb = parseInt(document.getElementById('maxBurst').value);
+  currentProcs = generateProcessList(n, mb);
+  ganttData = [];
+  renderProcTable(currentProcs);
+  drawGantt([]);
+  clearStats();
+  addLog('simLog', `Generated ${n} processes (max burst: ${mb})`, 'info');
+}
+
+function clearStats() {
+  document.getElementById('simTime').textContent = '0';
+  document.getElementById('simDone').textContent = '0';
+  document.getElementById('simWait').textContent = '0.0';
+  document.getElementById('simUtil').textContent = '0%';
+}
+
+function renderProcTable(procs) {
+  const tbody = document.getElementById('procBody');
+  tbody.innerHTML = procs.map(p=>`
+    <tr class="${p.state==='running'?'running':''}">
+      <td><strong>${p.pid}</strong></td>
+      <td>${p.burst}</td>
+      <td>${p.priority}</td>
+      <td>${p.arrival}</td>
+      <td>${p.wait||0}</td>
+      <td><span class="badge badge-${p.state||'waiting'}">${p.state||'READY'}</span></td>
+    </tr>`).join('');
+}
+
+function startSimulation() {
+  if(!currentProcs.length) { generateProcesses(); return; }
+  const sched = document.getElementById('schedulerSelect').value;
+  const quantum = parseInt(document.getElementById('timeQuantum').value);
+  const procs = currentProcs.map(p=>({...p}));
+  let result;
+
+  addLog('simLog', `Running ${sched.toUpperCase()} scheduler on ${procs.length} processes`, 'info');
+
+  if(sched==='fcfs') result = scheduleFCFS(procs);
+  else if(sched==='sjf') result = scheduleSJF(procs);
+  else if(sched==='rr') result = scheduleRR(procs, quantum);
+  else result = scheduleRL(procs, agent);
+
+  const avgWait = result.procs.reduce((s,p)=>s+(p.wait||0),0)/result.procs.length;
+  const lastEnd = Math.max(...result.gantt.map(g=>g.end),1);
+  const busyTime = result.gantt.reduce((s,g)=>s+(g.end-g.start),0);
+  const util = (busyTime/lastEnd*100).toFixed(1);
+
+  document.getElementById('simTime').textContent = lastEnd;
+  document.getElementById('simDone').textContent = result.procs.length;
+  document.getElementById('simWait').textContent = avgWait.toFixed(1);
+  document.getElementById('simUtil').textContent = util+'%';
+
+  result.procs.forEach(p=>p.state='done');
+  renderProcTable(result.procs);
+  drawGantt(result.gantt);
+  updateQHeatmap(procs);
+  addLog('simLog', `Done. Avg wait: ${avgWait.toFixed(2)} | Turnaround: ${(result.procs.reduce((s,p)=>s+(p.finish-p.arrival),0)/result.procs.length).toFixed(2)} | CPU util: ${util}%`, 'ok');
+}
+
+function drawGantt(ganttArr) {
+  const canvas = document.getElementById('ganttCanvas');
+  const wrap = canvas.parentElement;
+  const pids = [...new Set(ganttArr.map(g=>g.pid))];
+  const maxEnd = Math.max(...ganttArr.map(g=>g.end), 10);
+  const W = Math.max(wrap.clientWidth-20, maxEnd*28+60);
+  canvas.width = W; canvas.height = 80;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,80);
+  const colors = ['#00e5ff','#7c3aed','#22c55e','#f59e0b','#ef4444','#ec4899','#06b6d4','#a855f7','#84cc16','#f97316'];
+  const pidColor = {};
+  pids.forEach((p,i)=>pidColor[p]=colors[i%colors.length]);
+  const scale = (W-60)/maxEnd;
+  ganttArr.forEach(g=>{
+    const x = 40+g.start*scale, w = (g.end-g.start)*scale;
+    ctx.fillStyle = pidColor[g.pid]+'33';
+    ctx.strokeStyle = pidColor[g.pid];
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x, 10, Math.max(w-2,2), 44, 4);
+    ctx.fill(); ctx.stroke();
+    if(w > 18) {
+      ctx.fillStyle = pidColor[g.pid];
+      ctx.font = 'bold 10px JetBrains Mono';
+      ctx.textAlign = 'center';
+      ctx.fillText(g.pid, x+w/2, 36);
+    }
+  });
+  ctx.fillStyle = '#64748b';
+  ctx.font = '9px JetBrains Mono';
+  ctx.textAlign = 'center';
+  for(let t=0;t<=maxEnd;t+=Math.max(1,Math.floor(maxEnd/10))) {
+    ctx.fillText(t, 40+t*scale, 68);
+  }
+}
+
+// ==================== TRAIN TAB ====================
+
+function addLog(id, msg, type='info') {
+  const box = document.getElementById(id);
+  const d = document.createElement('div');
+  d.className = 'log-line';
+  const t = new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  d.innerHTML = `<span class="log-time">${t}</span><span class="log-${type}">${msg}</span>`;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+function startTraining() {
+  if(isTraining) return;
+  isTraining = true;
+  document.getElementById('trainBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  setStatus('TRAINING', 'amber');
+
+  const totalEp = parseInt(document.getElementById('episodes').value);
+  agent.lr = parseInt(document.getElementById('lr').value)/10000;
+  agent.gamma = parseInt(document.getElementById('gamma').value)/100;
+  agent.epsilon = parseInt(document.getElementById('epsStart').value)/100;
+  agent.epsMin = parseInt(document.getElementById('epsMin').value)/100;
+  const bsMap = [8,16,32,64,128,256];
+  agent.batchSize = bsMap[parseInt(document.getElementById('batchSize').value)-1]||32;
+
+  addLog('trainLog', `Training started: ${totalEp} episodes, lr=${agent.lr}, γ=${agent.gamma}`, 'info');
+  const startTime = Date.now();
+  let ep = 0;
+
+  function runEpisode() {
+    if(!isTraining || ep >= totalEp) {
+      finishTraining(ep, totalEp);
+      return;
+    }
+    const n = 5+Math.floor(Math.random()*4);
+    const procs = generateProcessList(n, 15);
+    const ps = procs.map(p=>({...p,rem:p.burst}));
+    let t=0, totalReward=0, done=false, totalWait=0;
+
+    while(!done && t<200) {
+      const avail = ps.filter(p=>p.arrival<=t && p.rem>0);
+      if(!avail.length) { t++; continue; }
+      const state = encodeState(ps, n);
+      const validActs = avail.map(p=>ps.indexOf(p));
+      const action = agent.selectAction(state, validActs);
+      const p = ps[action];
+      if(p.start===-1) p.start=t;
+      const waitPenalty = avail.filter(q=>q!==p).reduce((s,q)=>s+q.rem,0)/Math.max(...ps.map(p=>p.burst),1);
+      const completionBonus = p.rem===1 ? 10 : 0;
+      const reward = -waitPenalty*0.5 + completionBonus;
+      totalReward += reward;
+      p.rem--;
+      t++;
+      if(p.rem===0) { p.finish=t; totalWait+=Math.max(0,p.start-p.arrival); }
+      const nextState = encodeState(ps, n);
+      done = ps.every(p=>p.rem===0);
+      agent.store(state, action, reward, nextState, done);
+      agent.train();
+    }
+    const avgWait = totalWait/n;
+    ep++;
+    totalEpisodes++;
+    rewardHistory.push(totalReward);
+
+    const progress = (ep/totalEp*100).toFixed(0);
+    document.getElementById('trainProgress').style.width = progress+'%';
+    document.getElementById('trainEpLabel').textContent = `Episode ${ep} / ${totalEp}`;
+    const elapsed = (Date.now()-startTime)/1000;
+    const eta = ((elapsed/ep)*(totalEp-ep)).toFixed(0);
+    document.getElementById('trainEtaLabel').textContent = `ETA: ${eta}s`;
+    document.getElementById('mEpisodes').textContent = totalEpisodes;
+    document.getElementById('mBestReward').textContent = Math.max(...rewardHistory).toFixed(2);
+    const last20 = rewardHistory.slice(-20);
+    document.getElementById('mAvgReward').textContent = (last20.reduce((a,b)=>a+b,0)/last20.length).toFixed(2);
+    document.getElementById('mEpsilon').textContent = agent.epsilon.toFixed(3);
+    document.getElementById('mBuffer').textContent = agent.replayBuffer.length;
+    document.getElementById('mAvgWait').textContent = avgWait.toFixed(2);
+    document.getElementById('hdrEpisodes').textContent = totalEpisodes;
+    document.getElementById('hdrReward').textContent = (last20.reduce((a,b)=>a+b,0)/last20.length).toFixed(1);
+
+    if(ep%10===0) addLog('trainLog', `Ep ${ep}: reward=${totalReward.toFixed(2)}, ε=${agent.epsilon.toFixed(3)}, wait=${avgWait.toFixed(2)}`, ep%50===0?'ok':'info');
+    drawRewardCurve();
+    trainTimer = setTimeout(runEpisode, 0);
+  }
+  runEpisode();
+}
+
+function stopTraining() {
+  isTraining = false;
+  if(trainTimer) clearTimeout(trainTimer);
+  document.getElementById('trainBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setStatus('READY', 'green');
+  addLog('trainLog', `Training stopped at episode ${totalEpisodes}`, 'warn');
+}
+
+function finishTraining(ep, total) {
+  isTraining = false;
+  document.getElementById('trainBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setStatus('TRAINED', 'green');
+  addLog('trainLog', `✓ Training complete! ${ep} episodes. Best reward: ${Math.max(...rewardHistory).toFixed(2)}`, 'ok');
+  showToast('Training complete! Agent is ready.');
+  drawNeuralNet();
+}
+
+function resetAgent() {
+  agent = new QTable(12);
+  rewardHistory = [];
+  totalEpisodes = 0;
+  document.getElementById('hdrEpisodes').textContent = '0';
+  document.getElementById('hdrReward').textContent = '—';
+  document.getElementById('mEpisodes').textContent = '0';
+  document.getElementById('mBestReward').textContent = '—';
+  document.getElementById('mAvgReward').textContent = '—';
+  document.getElementById('mEpsilon').textContent = '1.00';
+  document.getElementById('mBuffer').textContent = '0';
+  document.getElementById('mAvgWait').textContent = '—';
+  document.getElementById('trainProgress').style.width = '0%';
+  drawRewardCurve();
+  setStatus('READY', 'green');
+  addLog('trainLog', 'Agent reset.', 'warn');
+}
+
+function drawRewardCurve() {
+  const canvas = document.getElementById('rewardCanvas');
+  const W = canvas.parentElement.clientWidth-40||600;
+  canvas.width = W; canvas.height = 200;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,200);
+  if(rewardHistory.length < 2) return;
+
+  const data = rewardHistory;
+  const mn = Math.min(...data), mx = Math.max(...data);
+  const pad = {t:20,r:20,b:30,l:50};
+  const pw = W-pad.l-pad.r, ph = 200-pad.t-pad.b;
+  const xScale = pw/(data.length-1);
+  const yScale = ph/(mx-mn||1);
+
+  // Grid
+  ctx.strokeStyle = '#1e2330'; ctx.lineWidth = 0.5;
+  for(let i=0;i<=4;i++) {
+    const y = pad.t+ph*(i/4);
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+pw,y); ctx.stroke();
+    ctx.fillStyle='#64748b'; ctx.font='9px JetBrains Mono'; ctx.textAlign='right';
+    ctx.fillText((mn+(mx-mn)*(1-i/4)).toFixed(0), pad.l-4, y+3);
+  }
+
+  // Smoothed line (moving avg)
+  const smooth = data.map((_,i)=>{
+    const w = Math.min(i,9,data.length-1-i);
+    const slice = data.slice(Math.max(0,i-w), i+w+1);
+    return slice.reduce((a,b)=>a+b,0)/slice.length;
+  });
+
+  // Raw area
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t+ph-(data[0]-mn)*yScale);
+  for(let i=1;i<data.length;i++) ctx.lineTo(pad.l+i*xScale, pad.t+ph-(data[i]-mn)*yScale);
+  ctx.lineTo(pad.l+pw, pad.t+ph); ctx.lineTo(pad.l, pad.t+ph); ctx.closePath();
+  ctx.fillStyle='rgba(124,58,237,0.08)'; ctx.fill();
+
+  // Smooth line
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t+ph-(smooth[0]-mn)*yScale);
+  for(let i=1;i<smooth.length;i++) ctx.lineTo(pad.l+i*xScale, pad.t+ph-(smooth[i]-mn)*yScale);
+  ctx.strokeStyle='#00e5ff'; ctx.lineWidth=2; ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle='#64748b'; ctx.font='9px JetBrains Mono'; ctx.textAlign='center';
+  ctx.fillText('Episodes', pad.l+pw/2, 200-4);
+  ctx.textAlign='center'; ctx.fillText(`Reward (${data.length} episodes)`, pad.l+pw/2, 12);
+}
+
+// ==================== COMPARE TAB ====================
+
+function runBenchmark() {
+  const n = parseInt(document.getElementById('benchN').value);
+  addLog('simLog','Benchmark running...','info');
+  const results = {rl:{wait:0,turn:0,util:0,thru:0}, fcfs:{wait:0,turn:0,util:0,thru:0}, sjf:{wait:0,turn:0,util:0,thru:0}, rr:{wait:0,turn:0,util:0,thru:0}};
+
+  for(let i=0;i<n;i++) {
+    const procs = generateProcessList(6+Math.floor(Math.random()*4), 15);
+    const quantum = 3;
+    const rs = {
+      rl: scheduleRL(procs.map(p=>({...p})), agent),
+      fcfs: scheduleFCFS(procs.map(p=>({...p}))),
+      sjf: scheduleSJF(procs.map(p=>({...p}))),
+      rr: scheduleRR(procs.map(p=>({...p})), quantum)
+    };
+    for(const [k,r] of Object.entries(rs)) {
+      const np = r.procs.length;
+      results[k].wait += r.procs.reduce((s,p)=>s+(p.wait||0),0)/np;
+      results[k].turn += r.procs.reduce((s,p)=>s+((p.finish||0)-(p.arrival||0)),0)/np;
+      const lastEnd = Math.max(...r.gantt.map(g=>g.end),1);
+      const busy = r.gantt.reduce((s,g)=>s+(g.end-g.start),0);
+      results[k].util += busy/lastEnd*100;
+      results[k].thru += np/lastEnd;
+    }
+  }
+  for(const k of Object.keys(results)) {
+    results[k].wait/=n; results[k].turn/=n; results[k].util/=n; results[k].thru/=n;
+  }
+  renderComparison(results);
+  showToast(`Benchmark complete (${n} workloads)`);
+}
+
+function renderComparison(results) {
+  const metrics = [
+    {id:'cmpWait', key:'wait', lbl:'Wait', invert:true},
+    {id:'cmpTurn', key:'turn', lbl:'Turn', invert:true},
+    {id:'cmpUtil', key:'util', lbl:'Util', invert:false},
+    {id:'cmpThru', key:'thru', lbl:'Thru', invert:false}
+  ];
+  const algos = ['rl','fcfs','sjf','rr'];
+  for(const {id,key,invert} of metrics) {
+    const el = document.getElementById(id);
+    const vals = algos.map(a=>results[a][key]);
+    const maxV = Math.max(...vals);
+    el.innerHTML = algos.map(a=>{
+      const v = results[a][key];
+      const pct = invert ? (1-v/maxV)*100 : (v/maxV)*100;
+      const show = key==='util'||key==='thru' ? v.toFixed(1) : v.toFixed(2);
+      return `<div class="cmp-row">
+        <span class="cmp-label badge badge-${a}">${a.toUpperCase()}</span>
+        <div class="cmp-bar-track">
+          <div class="cmp-bar cmp-bar-${a}" style="width:${Math.max(pct,5)}%">${show}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ==================== NETWORK TAB ====================
+
+function drawNeuralNet() {
+  const canvas = document.getElementById('nnCanvas');
+  const W = canvas.parentElement.clientWidth-40||400;
+  canvas.width = W; canvas.height = 300;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,300);
+  const layers = [{n:8,label:'State\nInput'},{n:6,label:'Hidden\n128'},{n:4,label:'Hidden\n64'},{n:6,label:'Q-Value\nOutput'}];
+  const lx = layers.map((_,i)=>60+i*(W-100)/3);
+  const maxN = Math.max(...layers.map(l=>l.n));
+
+  // Connections
+  for(let l=0;l<layers.length-1;l++) {
+    for(let i=0;i<layers[l].n;i++) {
+      for(let j=0;j<layers[l+1].n;j++) {
+        const y1 = 30+(i/(layers[l].n-1||1))*240, y2 = 30+(j/(layers[l+1].n-1||1))*240;
+        ctx.beginPath(); ctx.moveTo(lx[l],y1); ctx.lineTo(lx[l+1],y2);
+        ctx.strokeStyle=`rgba(124,58,237,${0.05+Math.random()*0.1})`; ctx.lineWidth=0.5; ctx.stroke();
+      }
+    }
+  }
+  // Nodes
+  const nodeColors = ['#00e5ff','#22c55e','#22c55e','#7c3aed'];
+  layers.forEach((layer,l)=>{
+    for(let i=0;i<layer.n;i++) {
+      const y = 30+(i/(layer.n-1||1))*240;
+      ctx.beginPath(); ctx.arc(lx[l],y,7,0,Math.PI*2);
+      ctx.fillStyle=nodeColors[l]+'33'; ctx.fill();
+      ctx.strokeStyle=nodeColors[l]; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    const parts = layer.label.split('\n');
+    ctx.fillStyle='#64748b'; ctx.font='9px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText(parts[0], lx[l], 275);
+    ctx.fillText(parts[1]||'', lx[l], 288);
+  });
+}
+
+function updateQHeatmap(procs) {
+  const canvas = document.getElementById('qHeatmap');
+  const W = canvas.parentElement.clientWidth-40||600;
+  canvas.width=W; canvas.height=120;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,W,120);
+  if(!procs||!procs.length) return;
+  const state = encodeState(procs.map(p=>({...p,state:'waiting',wait:0})),procs.length);
+  const qvals = agent.forward(state);
+  const actions = procs.length;
+  const cellW = (W-60)/actions;
+  const mn=Math.min(...qvals.slice(0,actions)), mx=Math.max(...qvals.slice(0,actions));
+  for(let i=0;i<actions;i++) {
+    const q = qvals[i]||0;
+    const t = (q-mn)/(mx-mn+0.001);
+    const r=Math.floor(t*0+124*(1-t)), g=Math.floor(t*229), b=Math.floor(t*255);
+    ctx.fillStyle=`rgb(${r},${g},${b})`;
+    ctx.fillRect(60+i*cellW, 20, cellW-4, 60);
+    ctx.fillStyle='#e2e8f0'; ctx.font='10px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText(procs[i].pid, 60+i*cellW+cellW/2-2, 92);
+    ctx.fillStyle='#64748b'; ctx.font='9px JetBrains Mono';
+    ctx.fillText(q.toFixed(2), 60+i*cellW+cellW/2-2, 105);
+  }
+  ctx.fillStyle='#64748b'; ctx.font='10px JetBrains Mono'; ctx.textAlign='right';
+  ctx.fillText('High Q →', 54, 55);
+  ctx.fillText('Low Q →', 54, 72);
+}
+
+// ==================== UTILS ====================
+
+function setStatus(text, color) {
+  document.getElementById('statusText').textContent=text;
+  document.getElementById('statusText').style.color=`var(--${color})`;
+  const dot=document.getElementById('statusDot');
+  dot.className=`dot ${color}`;
+}
+
+function showToast(msg) {
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),3000);
+}
+
+function switchTab(id) {
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  event.target.classList.add('active');
+  if(id==='network') { drawNeuralNet(); }
+}
+
+// ==================== INIT ====================
+
+generateProcesses();
+drawRewardCurve();
+setTimeout(()=>{
+  drawNeuralNet();
+  const defaultProcs = generateProcessList(6,15);
+  updateQHeatmap(defaultProcs);
+},100);
+</script>
+</body>
+</html>
